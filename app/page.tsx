@@ -12,12 +12,18 @@ type ImagePreview = {
   size: number;
   url: string;
 };
+type IssuesResponse = {
+  creators?: string[];
+  error?: string;
+  issues?: Issue[];
+};
 
 const initialForm = {
   title: "",
   description: "",
   category: "other" as IssueCategory
 };
+const SEARCH_DEBOUNCE_MS = 250;
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en", {
@@ -31,12 +37,15 @@ export default function Home() {
   const [draftName, setDraftName] = useState("");
   const [issues, setIssues] = useState<Issue[]>([]);
   const [scope, setScope] = useState<Scope>("mine");
+  const [person, setPerson] = useState("all");
+  const [creators, setCreators] = useState<string[]>([]);
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState<IssueStatus | "all">("all");
   const [query, setQuery] = useState("");
   const [form, setForm] = useState(initialForm);
   const [files, setFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<ImagePreview[]>([]);
+  const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -49,6 +58,14 @@ export default function Home() {
 
     return `${files.length} selected`;
   }, [files.length]);
+
+  const creatorOptions = useMemo(() => {
+    if (person !== "all" && !creators.includes(person)) {
+      return [person, ...creators];
+    }
+
+    return creators;
+  }, [creators, person]);
 
   useEffect(() => {
     const previews = files.map((file) => ({
@@ -64,44 +81,6 @@ export default function Home() {
     };
   }, [files]);
 
-  async function loadIssues(currentName = name) {
-    if (!currentName) {
-      return;
-    }
-
-    setLoading(true);
-    setError("");
-
-    const params = new URLSearchParams();
-    if (scope === "mine") {
-      params.set("owner", currentName);
-    }
-    if (category !== "all") {
-      params.set("category", category);
-    }
-    if (status !== "all") {
-      params.set("status", status);
-    }
-    if (query.trim()) {
-      params.set("q", query.trim());
-    }
-
-    try {
-      const response = await fetch(`/api/issues?${params.toString()}`);
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Could not load issues");
-      }
-
-      setIssues(data.issues);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Could not load issues");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
     const storedName = localStorage.getItem("festie-user-name") || "";
     setName(storedName);
@@ -109,9 +88,64 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void loadIssues();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, scope, category, status]);
+    if (!name) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      async () => {
+        setLoading(true);
+        setError("");
+
+        const params = new URLSearchParams();
+        if (scope === "mine") {
+          params.set("owner", name);
+        } else if (person !== "all") {
+          params.set("owner", person);
+        }
+        if (category !== "all") {
+          params.set("category", category);
+        }
+        if (status !== "all") {
+          params.set("status", status);
+        }
+        if (query.trim()) {
+          params.set("q", query.trim());
+        }
+
+        try {
+          const response = await fetch(`/api/issues?${params.toString()}`, {
+            signal: controller.signal
+          });
+          const data = (await response.json()) as IssuesResponse;
+
+          if (!response.ok) {
+            throw new Error(data.error || "Could not load issues");
+          }
+
+          setIssues(data.issues || []);
+          setCreators(data.creators || []);
+        } catch (loadError) {
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          setError(loadError instanceof Error ? loadError.message : "Could not load issues");
+        } finally {
+          if (!controller.signal.aborted) {
+            setLoading(false);
+          }
+        }
+      },
+      query.trim() ? SEARCH_DEBOUNCE_MS : 0
+    );
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [name, scope, person, category, status, query, reloadKey]);
 
   function submitName(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -124,6 +158,7 @@ export default function Home() {
     localStorage.setItem("festie-user-name", cleanName);
     setName(cleanName);
     setScope("mine");
+    setPerson("all");
     setError("");
   }
 
@@ -172,7 +207,7 @@ export default function Home() {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
-      await loadIssues();
+      setReloadKey((current) => current + 1);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not create issue");
     } finally {
@@ -312,13 +347,41 @@ export default function Home() {
         <section className="issue-list-zone">
           <div className="filters">
             <div className="segmented" aria-label="Issue scope">
-              <button type="button" className={scope === "mine" ? "active" : ""} onClick={() => setScope("mine")}>
+              <button
+                type="button"
+                className={scope === "mine" ? "active" : ""}
+                onClick={() => {
+                  setScope("mine");
+                  setPerson("all");
+                }}
+              >
                 Mine
               </button>
-              <button type="button" className={scope === "all" ? "active" : ""} onClick={() => setScope("all")}>
+              <button
+                type="button"
+                className={scope === "all" ? "active" : ""}
+                onClick={() => {
+                  setScope("all");
+                  setPerson("all");
+                }}
+              >
                 All
               </button>
             </div>
+
+            {scope === "all" ? (
+              <label className="select-shell">
+                <CircleUserRound size={16} />
+                <select value={person} onChange={(event) => setPerson(event.target.value)}>
+                  <option value="all">All names</option>
+                  {creatorOptions.map((creator) => (
+                    <option value={creator} key={creator}>
+                      {creator}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
 
             <label className="select-shell">
               <Filter size={16} />
@@ -342,7 +405,7 @@ export default function Home() {
               className="search-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                void loadIssues();
+                setReloadKey((current) => current + 1);
               }}
             >
               <Search size={16} />
@@ -354,7 +417,6 @@ export default function Home() {
                   aria-label="Clear search"
                   onClick={() => {
                     setQuery("");
-                    setTimeout(() => void loadIssues(), 0);
                   }}
                 >
                   <X size={14} />
@@ -367,7 +429,7 @@ export default function Home() {
 
           <div className="list-header">
             <span>{loading ? "Loading" : `${issues.length} issue${issues.length === 1 ? "" : "s"}`}</span>
-            <button type="button" className="button subtle" onClick={() => void loadIssues()} disabled={loading}>
+            <button type="button" className="button subtle" onClick={() => setReloadKey((current) => current + 1)} disabled={loading}>
               {loading ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
               <span>Refresh</span>
             </button>

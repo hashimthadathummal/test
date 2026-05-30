@@ -8,6 +8,11 @@ import type { Issue, IssueStatus } from "@/types/issue";
 export const runtime = "nodejs";
 
 type IssueDocument = Omit<Issue, "_id">;
+type IssueFilterValues = {
+  category: string | null;
+  status: string | null;
+  q: string | undefined;
+};
 
 const MAX_IMAGES = 5;
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
@@ -23,18 +28,8 @@ function serializeIssue(issue: IssueDocument & { _id: object }): Issue {
   };
 }
 
-export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const owner = searchParams.get("owner")?.trim();
-  const category = searchParams.get("category");
-  const status = searchParams.get("status") as IssueStatus | null;
-  const q = searchParams.get("q")?.trim();
-
-  const filter: Filter<IssueDocument> = {};
-
-  if (owner) {
-    filter.createdBy = owner;
-  }
+function applyIssueFilters(filter: Filter<IssueDocument>, values: IssueFilterValues) {
+  const { category, status, q } = values;
 
   if (category && category !== "all" && isIssueCategory(category)) {
     filter.category = category;
@@ -49,15 +44,45 @@ export async function GET(request: NextRequest) {
     filter.$or = [{ title: regex }, { description: regex }, { createdBy: regex }];
   }
 
+  return filter;
+}
+
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const owner = searchParams.get("owner")?.trim() || searchParams.get("createdBy")?.trim();
+  const category = searchParams.get("category");
+  const status = searchParams.get("status");
+  const q = searchParams.get("q")?.trim();
+
+  if (category && category !== "all" && !isIssueCategory(category)) {
+    return NextResponse.json({ error: `Category must be one of: ${CATEGORIES.join(", ")}` }, { status: 400 });
+  }
+
+  if (status && status !== "all" && status !== "open" && status !== "cleared") {
+    return NextResponse.json({ error: "Status must be open, cleared, or all" }, { status: 400 });
+  }
+
+  const sharedFilters = { category, status, q };
+  const filter = applyIssueFilters({}, sharedFilters);
+
+  if (owner) {
+    filter.createdBy = new RegExp(`^${escapeRegex(owner)}$`, "i");
+  }
+
   const db = await getDb();
+  const collection = db.collection<IssueDocument>("issues");
   const issues = await db
     .collection<IssueDocument>("issues")
     .find(filter)
     .sort({ createdAt: -1 })
     .limit(200)
     .toArray();
+  const creators = await collection.distinct("createdBy", applyIssueFilters({}, sharedFilters));
 
-  return NextResponse.json({ issues: issues.map(serializeIssue) });
+  return NextResponse.json({
+    creators: creators.filter((creator): creator is string => typeof creator === "string" && Boolean(creator.trim())).sort((a, b) => a.localeCompare(b)),
+    issues: issues.map(serializeIssue)
+  });
 }
 
 export async function POST(request: Request) {

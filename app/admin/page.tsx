@@ -1,10 +1,18 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { CheckCircle2, Loader2, LockKeyhole, LogIn, RotateCcw, Search, ShieldCheck } from "lucide-react";
+import { CheckCircle2, CircleUserRound, Loader2, LockKeyhole, LogIn, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
 import { CATEGORIES } from "@/lib/categories";
 import type { Issue, IssueStatus } from "@/types/issue";
+
+type IssuesResponse = {
+  creators?: string[];
+  error?: string;
+  issues?: Issue[];
+};
+
+const SEARCH_DEBOUNCE_MS = 250;
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en", {
@@ -18,12 +26,23 @@ export default function AdminPage() {
   const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
   const [issues, setIssues] = useState<Issue[]>([]);
+  const [person, setPerson] = useState("all");
+  const [creators, setCreators] = useState<string[]>([]);
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState<IssueStatus | "all">("open");
   const [query, setQuery] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState("");
   const [error, setError] = useState("");
+
+  const creatorOptions = useMemo(() => {
+    if (person !== "all" && !creators.includes(person)) {
+      return [person, ...creators];
+    }
+
+    return creators;
+  }, [creators, person]);
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -43,37 +62,6 @@ export default function AdminPage() {
 
     sessionStorage.setItem("festie-admin-token", data.token);
     setToken(data.token);
-  }
-
-  async function loadIssues() {
-    setLoading(true);
-    setError("");
-
-    const params = new URLSearchParams();
-    if (category !== "all") {
-      params.set("category", category);
-    }
-    if (status !== "all") {
-      params.set("status", status);
-    }
-    if (query.trim()) {
-      params.set("q", query.trim());
-    }
-
-    try {
-      const response = await fetch(`/api/issues?${params.toString()}`);
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Could not load issues");
-      }
-
-      setIssues(data.issues);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Could not load issues");
-    } finally {
-      setLoading(false);
-    }
   }
 
   async function setIssueStatus(issueId: string, nextStatus: IssueStatus) {
@@ -100,6 +88,7 @@ export default function AdminPage() {
       }
 
       setIssues((current) => current.map((issue) => (issue._id === issueId ? data.issue : issue)));
+      setReloadKey((current) => current + 1);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Could not update issue");
     } finally {
@@ -114,10 +103,59 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (token) {
-      void loadIssues();
+      const controller = new AbortController();
+      const timeout = window.setTimeout(
+        async () => {
+          setLoading(true);
+          setError("");
+
+          const params = new URLSearchParams();
+          if (person !== "all") {
+            params.set("owner", person);
+          }
+          if (category !== "all") {
+            params.set("category", category);
+          }
+          if (status !== "all") {
+            params.set("status", status);
+          }
+          if (query.trim()) {
+            params.set("q", query.trim());
+          }
+
+          try {
+            const response = await fetch(`/api/issues?${params.toString()}`, {
+              signal: controller.signal
+            });
+            const data = (await response.json()) as IssuesResponse;
+
+            if (!response.ok) {
+              throw new Error(data.error || "Could not load issues");
+            }
+
+            setIssues(data.issues || []);
+            setCreators(data.creators || []);
+          } catch (loadError) {
+            if (controller.signal.aborted) {
+              return;
+            }
+
+            setError(loadError instanceof Error ? loadError.message : "Could not load issues");
+          } finally {
+            if (!controller.signal.aborted) {
+              setLoading(false);
+            }
+          }
+        },
+        query.trim() ? SEARCH_DEBOUNCE_MS : 0
+      );
+
+      return () => {
+        window.clearTimeout(timeout);
+        controller.abort();
+      };
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, category, status]);
+  }, [token, person, category, status, query, reloadKey]);
 
   if (!token) {
     return (
@@ -172,6 +210,18 @@ export default function AdminPage() {
 
       <section className="admin-board">
         <div className="filters">
+          <label className="select-shell">
+            <CircleUserRound size={16} />
+            <select value={person} onChange={(event) => setPerson(event.target.value)}>
+              <option value="all">All names</option>
+              {creatorOptions.map((creator) => (
+                <option value={creator} key={creator}>
+                  {creator}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <select className="compact-select" value={category} onChange={(event) => setCategory(event.target.value)}>
             <option value="all">All categories</option>
             {CATEGORIES.map((item) => (
@@ -191,14 +241,19 @@ export default function AdminPage() {
             className="search-form"
             onSubmit={(event) => {
               event.preventDefault();
-              void loadIssues();
+              setReloadKey((current) => current + 1);
             }}
           >
             <Search size={16} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" />
+            {query ? (
+              <button type="button" className="icon-button ghost" aria-label="Clear search" onClick={() => setQuery("")}>
+                <X size={14} />
+              </button>
+            ) : null}
           </form>
 
-          <button type="button" className="button subtle" onClick={() => void loadIssues()} disabled={loading}>
+          <button type="button" className="button subtle" onClick={() => setReloadKey((current) => current + 1)} disabled={loading}>
             {loading ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
             <span>Refresh</span>
           </button>
