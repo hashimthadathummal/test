@@ -243,6 +243,42 @@ textarea:focus {
   cursor: pointer;
 }
 
+.selected-image-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.selected-image {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #eef3f6;
+}
+
+.selected-image img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.remove-image-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(20, 25, 31, 0.78);
+  color: #fff;
+}
+
 .filters {
   display: flex;
   align-items: center;
@@ -525,6 +561,10 @@ textarea:focus {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .selected-image-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .filters,

@@ -1,12 +1,17 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { CheckCircle2, CircleUserRound, Filter, Images, Loader2, LogIn, Plus, Search, UserRoundPen, X } from "lucide-react";
 import { CATEGORIES, type IssueCategory } from "@/lib/categories";
 import type { Issue, IssueStatus } from "@/types/issue";
 
 type Scope = "mine" | "all";
+type ImagePreview = {
+  name: string;
+  size: number;
+  url: string;
+};
 
 const initialForm = {
   title: "",
@@ -31,9 +36,11 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [form, setForm] = useState(initialForm);
   const [files, setFiles] = useState<File[]>([]);
+  const [imagePreviews, setImagePreviews] = useState<ImagePreview[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fileLabel = useMemo(() => {
     if (!files.length) {
@@ -42,6 +49,20 @@ export default function Home() {
 
     return `${files.length} selected`;
   }, [files.length]);
+
+  useEffect(() => {
+    const previews = files.map((file) => ({
+      name: file.name,
+      size: file.size,
+      url: URL.createObjectURL(file)
+    }));
+
+    setImagePreviews(previews);
+
+    return () => {
+      previews.forEach((preview) => URL.revokeObjectURL(preview.url));
+    };
+  }, [files]);
 
   async function loadIssues(currentName = name) {
     if (!currentName) {
@@ -110,6 +131,14 @@ export default function Home() {
     setFiles(Array.from(event.target.files || []).slice(0, 5));
   }
 
+  function removeSelectedFile(index: number) {
+    setFiles((current) => current.filter((_, currentIndex) => currentIndex !== index));
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
   async function submitIssue(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name) {
@@ -140,6 +169,9 @@ export default function Home() {
 
       setForm(initialForm);
       setFiles([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
       await loadIssues();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not create issue");
@@ -253,9 +285,28 @@ export default function Home() {
                 <Images size={18} />
                 <span>{fileLabel}</span>
               </label>
-              <input id="images" className="sr-only" type="file" accept="image/*" multiple onChange={handleFiles} />
+              <input ref={fileInputRef} id="images" className="sr-only" type="file" accept="image/*" multiple onChange={handleFiles} />
             </div>
           </div>
+
+          {imagePreviews.length ? (
+            <div className="selected-image-grid" aria-label="Selected image previews">
+              {imagePreviews.map((preview, index) => (
+                <div className="selected-image" key={`${preview.name}-${preview.size}-${index}`}>
+                  <img src={preview.url} alt={preview.name} />
+                  <button
+                    type="button"
+                    className="remove-image-button"
+                    aria-label={`Remove ${preview.name}`}
+                    title="Remove image"
+                    onClick={() => removeSelectedFile(index)}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </form>
 
         <section className="issue-list-zone">
